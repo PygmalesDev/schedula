@@ -4,10 +4,10 @@ from rich.console import Console
 from random import randint
     
 class SchedulerType():
-    FIFO = "FIFO"
-    SJF  = "SJF"
-    STCF = "STCF"
-    RR   = "RR"
+    FIFO = "FIFO (First In First Out)"
+    SJF  = "SJF (Shortest Job First)"
+    STCF = "STCF (Shortest Time to Completion First)"
+    RR   = "RR (Round Robin)"
 
 colors = ["red", "blue", "green", "magenta", "cyan", "deep_pink1"]
 console = Console()
@@ -21,6 +21,7 @@ class Task():
         self.worktime = 0
         self.finish = 0
         self.name = name
+        self.slicetask: Task = None
 
         if color == "none": 
             self.color = colors[randint(0, len(colors)-1)]
@@ -34,11 +35,14 @@ class Task():
         return self.arrive-self.enter
     
     def __str__(self):
-        return f"{self.name}:  WT={self.worktime:2} ENTER={self.enter:2} ARRIVE={self.arrive:2} PT={self.pass_time():2} AT={self.answer_time():2}"
+        return (f"{self.name}:  WORKT_EST={self.calc:2}  SCHEDULED_AT={self.enter:2}  FIRST_ENTRY={self.arrive:2}  FINISHED_AT={self.finish:2}" +
+                f"\n    PASS_TIME={self.pass_time():2} ({self.finish}-{self.enter})" +
+                f"\n    ANSWER_TIME={self.answer_time():2} ({self.arrive}-{self.enter})  SLICED={self.slicetask!=None}\n")
 
 class Scheduler():
     def __init__(self, type: SchedulerType):
         self.tasks = []
+        self.timeline = []
         self._type = type
         self.time = 0
     
@@ -49,6 +53,7 @@ class Scheduler():
 
 
     def create_timeline(self):
+        self.timeline = self.tasks.copy()
         match self._type:
             case SchedulerType.FIFO: self.fifo()
             case SchedulerType.SJF:  self.sjf()
@@ -58,15 +63,15 @@ class Scheduler():
     def print_timeline(self):
         get_arrive = lambda task: task.arrive
         console.print()
-        for task in sorted(self.tasks, key=get_arrive):
+        for task in sorted(self.timeline, key=get_arrive):
             length = int((task.worktime*6-1))
             console.print('┃' + length*'░', end='', style=task.color)
         console.print('┃')
-        for task in sorted(self.tasks, key=get_arrive):
+        for task in sorted(self.timeline, key=get_arrive):
             length = int((task.worktime*6-1)/2)-1
             console.print('┃' + length*'░' + f'▏{task.name}▕' + length*'░', end='', style=task.color)
         console.print('┃')
-        for task in sorted(self.tasks, key=get_arrive):
+        for task in sorted(self.timeline, key=get_arrive):
             length = int((task.worktime*6-1))
             console.print('┃' + length*'░', end='', style=task.color)
         console.print('┃')
@@ -82,21 +87,32 @@ class Scheduler():
             else: console.print('          ', end='')
         print('\n')
 
+
     def print_statistics(self):
         print(self._type)
+
+        for task in self.tasks:
+            last_slice = task
+            while last_slice.slicetask != None:
+                last_slice = last_slice.slicetask
+            task.finish = last_slice.finish
+            task.worktime = task.calc
+
         get_arrive = lambda task: task.arrive
         for task in sorted(self.tasks, key=get_arrive): print(task)
-        print(f"PT_avg={sum(list(map(lambda task: task.pass_time(), self.tasks)))/len(self.tasks):2.2f}")
-        print(f"AT_avg={sum(list(map(lambda task: task.answer_time(), self.tasks)))/len(self.tasks):2.2f}")
-    
+        print(f"PASS_TIME_AVG={sum(list(map(lambda task: task.pass_time(), self.tasks)))/len(self.tasks):2.2f}")
+        print(f"ANSWER_TIME_AVG={sum(list(map(lambda task: task.answer_time(), self.tasks)))/len(self.tasks):2.2f}")
+        print() 
+
+
     def fifo(self):
         queue = []
         running: Task = None
         tasks_completed = 0
 
-        while len(self.tasks) != tasks_completed:
+        while len(self.timeline) != tasks_completed:
             queue.extend(list(filter(lambda task: 
-                             task.enter == self.time, self.tasks)))
+                             task.enter == self.time, self.timeline)))
 
             if not running:
                 running = queue.pop(0)
@@ -117,9 +133,9 @@ class Scheduler():
         tasks_completed = 0
         
         get_calc = lambda task: task.calc
-        while len(self.tasks) != tasks_completed:
+        while len(self.timeline) != tasks_completed:
             queue.extend(list(filter(lambda task:
-                             task.enter == self.time, self.tasks)))
+                             task.enter == self.time, self.timeline)))
             queue = sorted(queue, key=get_calc)
 
             if not running:
@@ -139,12 +155,12 @@ class Scheduler():
         queue = []
         running: Task = None
         tasks_completed = 0
-        tasks_initial = len(self.tasks)
+        tasks_initial = len(self.timeline)
         
         get_calc = lambda task: task.calc
         while tasks_initial != tasks_completed:
             queue.extend(list(filter(lambda task:
-                             task.enter == self.time, self.tasks)))
+                             task.enter == self.time, self.timeline)))
             queue = sorted(queue, key=get_calc)
             
             if not running:
@@ -156,50 +172,54 @@ class Scheduler():
                 running.finish = self.time
                 new_task = Task(running.name, diff, 
                                 running.enter, color=running.color)
-                self.tasks.append(new_task)
+                self.timeline.append(new_task)
                 queue.append(new_task)
+                running.slicetask = new_task
+                
                 running = queue.pop(0)
                 running.arrive = self.time
 
             running.worktime += 1
+            self.time +=1
             if running.worktime == running.calc:
                 tasks_completed += 1
-                running.finish = self.time+1
+                running.finish = self.time
                 running = None
-            
-            self.time +=1
 
     def rr(self):
         queue = []
         running: Task = None
         tasks_completed = 0
-        tasks_initial = len(self.tasks)
+        tasks_initial = len(self.timeline)
         
         get_calc = lambda task: task.calc
         while tasks_initial != tasks_completed:
-            queue.extend(list(filter(lambda task:
-                             task.enter == self.time, self.tasks)))
             
+            queue.extend(list(filter(lambda task:
+                             task.enter == self.time, self.timeline)))
+            for task in queue:
+                print(f"{task.name} ", end ='')
+            print()
             if not running:
                 running = queue.pop(0)
                 running.arrive = self.time
 
             running.worktime += 1
+            self.time +=1
             if running.worktime == running.calc:
                 tasks_completed += 1
-                running.finish = self.time+1
+                running.finish = self.time
                 running = None
             else:
                 running.finish = self.time
                 new_task = Task(running.name, running.calc-1, 
                                 running.enter, color=running.color)
-                self.tasks.append(new_task)
+                self.timeline.append(new_task)
                 queue.append(new_task)
+                running.slicetask = new_task
+
                 running = queue.pop(0)
-                running.arrive = self.time
-                
-            self.time +=1
-       
+                running.arrive = self.time 
 
 
 def main():
